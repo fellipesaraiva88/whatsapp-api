@@ -167,3 +167,209 @@ model ActivityLogs {
   Instance    Instance? @relation(fields: [instanceId], references: [id], onDelete: Cascade)
   instanceId  Int?      @db.Integer
 }
+
+// ============================================
+// PANGEIA - Assistente Autônomo de Gestão
+// ============================================
+
+enum MemberRole {
+  LEADER
+  ASSIGNED
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum InsightType {
+  OVERLOAD
+  BOTTLENECK
+  PRODUCTIVITY_DROP
+  DEADLINE_RISK
+  TEAM_PERFORMANCE
+}
+
+enum IntegrationType {
+  GOOGLE_CALENDAR
+  NOTION
+  SUPABASE
+}
+
+// Equipes
+model Team {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique @db.VarChar(255)
+  description String?      @db.Text
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  members     TeamMember[]
+  tasks       Task[]
+  insights    Insight[]
+  memories    TeamMemory[]
+
+  @@index([name], name: "team_name_idx")
+}
+
+// Membros da equipe
+model TeamMember {
+  id                Int               @id @default(autoincrement())
+  whatsappJid       String            @db.VarChar(100)
+  name              String            @db.VarChar(255)
+  role              MemberRole        @default(ASSIGNED)
+  active            Boolean           @default(true)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  team              Team              @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId            Int
+  tasksCreated      Task[]            @relation("TaskCreator")
+  tasksAssigned     TaskAssignment[]
+  comments          TaskComment[]
+  statusChanges     TaskStatusHistory[]
+  notifications     Notification[]
+
+  @@unique([teamId, whatsappJid])
+  @@index([whatsappJid], name: "member_jid_idx")
+  @@index([teamId, role], name: "team_role_idx")
+}
+
+// Tarefas
+model Task {
+  id            Int                 @id @default(autoincrement())
+  title         String              @db.VarChar(500)
+  description   String?             @db.Text
+  status        TaskStatus          @default(PENDING)
+  priority      TaskPriority        @default(MEDIUM)
+  dueDate       DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  team          Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId        Int
+  creator       TeamMember          @relation("TaskCreator", fields: [creatorId], references: [id])
+  creatorId     Int
+  assignments   TaskAssignment[]
+  comments      TaskComment[]
+  statusHistory TaskStatusHistory[]
+  notifications Notification[]
+
+  @@index([teamId, status], name: "team_status_idx")
+  @@index([status, priority], name: "status_priority_idx")
+  @@index([dueDate], name: "due_date_idx")
+}
+
+// Atribuições de tarefas
+model TaskAssignment {
+  id         Int        @id @default(autoincrement())
+  task       Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId     Int
+  member     TeamMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId   Int
+  assignedAt DateTime   @default(now())
+
+  @@unique([taskId, memberId])
+}
+
+// Comentários em tarefas
+model TaskComment {
+  id        Int        @id @default(autoincrement())
+  content   String     @db.Text
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  task      Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId    Int
+  author    TeamMember @relation(fields: [authorId], references: [id])
+  authorId  Int
+}
+
+// Histórico de status de tarefas
+model TaskStatusHistory {
+  id             Int        @id @default(autoincrement())
+  previousStatus TaskStatus?
+  newStatus      TaskStatus
+  changedAt      DateTime   @default(now())
+  comment        String?    @db.Text
+  task           Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId         Int
+  changedBy      TeamMember @relation(fields: [changedById], references: [id])
+  changedById    Int
+
+  @@index([taskId], name: "task_history_idx")
+  @@index([changedAt], name: "change_date_idx")
+}
+
+// Memória expandida do agente (contexto de equipe)
+model TeamMemory {
+  id          Int      @id @default(autoincrement())
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId      Int
+  context     String   @db.VarChar(100) // ex: "weekly_goals", "last_report", "team_preferences"
+  data        Json     @db.JsonB // dados flexíveis em JSON
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  expiresAt   DateTime? // opcional: memórias que expiram
+
+  @@unique([teamId, context], name: "teamId_context")
+  @@index([teamId, context], name: "team_context_idx")
+}
+
+// Insights automáticos gerados pelo agente
+model Insight {
+  id          Int          @id @default(autoincrement())
+  team        Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId      Int
+  type        InsightType
+  severity    String       @db.VarChar(20) // LOW, MEDIUM, HIGH, CRITICAL
+  title       String       @db.VarChar(500)
+  description String       @db.Text
+  data        Json?        @db.JsonB // dados adicionais (ex: lista de tarefas afetadas)
+  resolved    Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  resolvedAt  DateTime?
+
+  @@index([teamId, resolved], name: "team_insights_idx")
+  @@index([createdAt], name: "insight_date_idx")
+}
+
+// Notificações automáticas agendadas
+model Notification {
+  id          Int        @id @default(autoincrement())
+  member      TeamMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId    Int
+  task        Task?      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId      Int?
+  type        String     @db.VarChar(50) // REMINDER, OVERDUE, REPORT, etc
+  message     String     @db.Text
+  scheduledFor DateTime
+  sent        Boolean    @default(false)
+  sentAt      DateTime?
+  createdAt   DateTime   @default(now())
+
+  @@index([memberId, sent], name: "member_notifications_idx")
+  @@index([scheduledFor, sent], name: "scheduled_notifications_idx")
+}
+
+// Integrações externas configuradas
+model Integration {
+  id            Int             @id @default(autoincrement())
+  type          IntegrationType
+  credentials   Json            @db.JsonB // credenciais encriptadas
+  config        Json?           @db.JsonB // configurações adicionais
+  active        Boolean         @default(true)
+  lastSyncAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([type, active], name: "integration_type_idx")
+}
